@@ -25,6 +25,7 @@ from typing_extensions import deprecated
 from pyvesync.base_devices import VeSyncFryer
 from pyvesync.const import (
     AIRFRYER_PID_MAP,
+    PREHEAT_STATUSES,
     AirFryerCookStatus,
     AirFryerPresetRecipe,
     ConnectionStatus,
@@ -472,18 +473,28 @@ class VeSyncTurboBlazeFryer(BypassV2Mixin, VeSyncFryer):
         if (
             resp_model is None
             or resp_model.cookStatus == AirFryerCookStatus.STANDBY.value
-            or not resp_model.stepArray
         ):
             self.state.set_standby()
             return
 
-        cook_step = resp_model.stepArray[resp_model.stepIndex]
         if resp_model.cookStatus not in self.status_map:
             logger.warning(
                 'Unknown cook status %s for %s',
                 resp_model.cookStatus,
                 self.device_name,
             )
+            self.state.set_standby()
+            return
+
+        cook_status = self.status_map[resp_model.cookStatus]
+        # The CAF-LI401S reports a running preheat program with an empty
+        # stepArray; preheatSetTime, preheatLastTime and preheatTemp carry it.
+        is_preheat_only = (
+            not resp_model.stepArray
+            and cook_status in PREHEAT_STATUSES
+            and bool(resp_model.preheatSetTime)
+        )
+        if not resp_model.stepArray and not is_preheat_only:
             self.state.set_standby()
             return
 
@@ -500,8 +511,19 @@ class VeSyncTurboBlazeFryer(BypassV2Mixin, VeSyncFryer):
         if _current_temp is not None and self.temp_unit == TemperatureUnits.FAHRENHEIT:
             _current_temp = round(_current_temp * 9 / 5 + 32)
 
+        if is_preheat_only:
+            self.state_chamber_1.set_state(
+                cook_status=cook_status,
+                cook_temp=resp_model.preheatTemp or None,
+                preheat_set_time=resp_model.preheatSetTime,
+                preheat_last_time=resp_model.preheatLastTime,
+                current_temp=_current_temp,
+            )
+            return
+
+        cook_step = resp_model.stepArray[resp_model.stepIndex]
         self.state_chamber_1.set_state(
-            cook_status=self.status_map[resp_model.cookStatus],
+            cook_status=cook_status,
             cook_time=cook_step.cookSetTime,
             cook_last_time=cook_step.cookLastTime,
             cook_temp=cook_step.cookTemp,
@@ -532,15 +554,10 @@ class VeSyncTurboBlazeFryer(BypassV2Mixin, VeSyncFryer):
         if r is None:
             self.state.set_standby()
             return False
-        self.state.set_state(
-            cook_status=AirFryerCookStatus.COOKING,
-            cook_time=recipe.cook_time,
-            cook_last_time=recipe.cook_time,
-            cook_temp=recipe.target_temp,
-            cook_mode=recipe.cook_mode,
-            preheat_set_time=recipe.preheat_time or None,
-            preheat_last_time=recipe.preheat_time or None,
-        )
+        # startCook is sent with readyStart False: the program is only staged
+        # and must be started on the appliance, so read back the real state
+        # instead of assuming it is cooking.
+        await self.get_details()
         return True
 
     async def set_mode(

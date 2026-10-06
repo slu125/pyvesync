@@ -1206,11 +1206,11 @@ air_fryer_modules: list[AirFryerMap] = [
         model_display='CAF-LI401S Series',
         model_name='Lite 3.8L Smart Air Fryer',
         temp_unit=TemperatureUnits.CELSIUS,
-        # The unit has a preheat program, but it reports preheat with an empty
+        # The unit has a preheat program and reports it with an empty
         # stepArray (cookStatus 'heating', preheatSetTime/preheatTemp set).
-        # VeSyncTurboBlazeFryer.get_details() treats an empty stepArray as
-        # standby, so preheat is not surfaced yet and PREHEAT is not claimed
-        # here. See the PR discussion.
+        # VeSyncTurboBlazeFryer.get_details() surfaces that as a preheat
+        # state. PREHEAT is still not claimed: starting a preheat through
+        # the API is untested on this model.
         features=[AirFryerFeatures.RESUMABLE],
         # The seven programs the unit exposes. Only the mode strings are
         # recorded: the temperature, time and shake time attached to each
@@ -1245,6 +1245,8 @@ air_fryer_modules: list[AirFryerMap] = [
                 'cookStop': AirFryerCookStatus.COOK_STOP,
                 'cookEnd': AirFryerCookStatus.COOK_END,
                 'pullOut': AirFryerCookStatus.PULL_OUT,
+                'preheatEnd': AirFryerCookStatus.PREHEAT_END,
+                'preheatStop': AirFryerCookStatus.PREHEAT_STOP,
             }
         ),
     ),

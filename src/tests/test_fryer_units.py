@@ -138,3 +138,89 @@ class TestFryerUnitHandling(TestBase):
         result = self.run_in_loop(fryer.set_mode, cook_time=600, cook_temp=300)
         assert result is False
         assert self.mock_api.call_count == 0
+
+
+class TestLI401SPreheat(TestBase):
+    """CAF-LI401S reports preheat with an empty stepArray."""
+
+    @staticmethod
+    def _status(**overrides):
+        from copy import deepcopy
+
+        from defaults import build_bypass_v2_response
+
+        inner = deepcopy(call_json_fryers.AIR_FRYER_STANDBY_DETAILS['CAF-LI401S'])
+        inner.update(overrides)
+        return build_bypass_v2_response(inner_result=inner)
+
+    def test_preheat_with_empty_step_array(self):
+        from pyvesync.const import AirFryerCookStatus
+
+        fryer = self.get_device('air_fryers', 'CAF-LI401S')
+        self.mock_api.return_value = (
+            self._status(
+                cookStatus='heating',
+                tempUnit='c',
+                preheatSetTime=240,
+                preheatLastTime=235,
+                preheatTemp=205,
+                currentTemp=45,
+            ),
+            200,
+        )
+        self.run_in_loop(fryer.update)
+        state = fryer.state
+        assert state.cook_status == AirFryerCookStatus.HEATING
+        assert state.is_preheating
+        assert state.is_running
+        assert state.preheat_set_time == 240
+        assert state.preheat_last_time == 235
+        assert state.cook_set_temp == 205
+        assert state.current_temp == 45
+        assert state.cook_last_time is None
+
+    def test_preheat_end_with_empty_step_array(self):
+        from pyvesync.const import AirFryerCookStatus
+
+        fryer = self.get_device('air_fryers', 'CAF-LI401S')
+        self.mock_api.return_value = (
+            self._status(
+                cookStatus='preheatEnd', tempUnit='c',
+                preheatSetTime=240, preheatLastTime=0, preheatTemp=205,
+            ),
+            200,
+        )
+        self.run_in_loop(fryer.update)
+        assert fryer.state.cook_status == AirFryerCookStatus.PREHEAT_END
+
+    def test_staged_preheat_is_standby(self):
+        from pyvesync.const import AirFryerCookStatus
+
+        fryer = self.get_device('air_fryers', 'CAF-LI401S')
+        self.mock_api.return_value = (
+            self._status(cookStatus='standby', preheatSetTime=240, preheatTemp=205),
+            200,
+        )
+        self.run_in_loop(fryer.update)
+        assert fryer.state.cook_status == AirFryerCookStatus.STANDBY
+        assert fryer.state.preheat_set_time is None
+
+    def test_heating_without_preheat_or_steps_is_standby(self):
+        from pyvesync.const import AirFryerCookStatus
+
+        fryer = self.get_device('air_fryers', 'CAF-LI401S')
+        self.mock_api.return_value = (self._status(cookStatus='heating'), 200)
+        self.run_in_loop(fryer.update)
+        assert fryer.state.cook_status == AirFryerCookStatus.STANDBY
+
+    def test_staging_reads_back_state(self):
+        """startCook only stages (readyStart False); state comes from the device."""
+        from pyvesync.const import AirFryerCookStatus
+
+        fryer = self.get_device('air_fryers', 'CAF-LI401S')
+        self.mock_api.return_value = (self._status(cookStatus='standby'), 200)
+        self.mock_api.reset_mock()
+        result = self.run_in_loop(fryer.set_mode, cook_time=600, cook_temp=180)
+        assert result is True
+        assert self.mock_api.call_count == 2  # startCook + getAirfryerStatus
+        assert fryer.state.cook_status == AirFryerCookStatus.STANDBY
